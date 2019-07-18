@@ -17,63 +17,54 @@ class MChain:
 class LocalDemon:
     def __init__( self ):
         self.Q = np.array([0.0, 0.0])
-        self.gamma = 0.9
+        self.gamma = 1.
         self.action = None
 
     def getMax( self ):
         return np.max(self.Q), np.argmax( self.Q )
 
     def act( self, env, e ):
-        if np.random.rand() < e:
-            Qa, self.action = self.getMax()
-        else:
+        if np.random.random_sample() < e:
             self.action = env.action_space.sample()
-        # beta = 0.1
-        # epsilon = (np.random.rand()-0.5)*beta
-
-        # if (self.Q[0] + epsilon) < self.Q[1]:
-        #     self.action = 1
-        # else:
-        #     self.action = 0
-
-        return self.action
+        else:
+            _, self.action = self.getMax()
 
     def update( self, alpha, reward, demon ):
-        Qa, action = demon.getMax()
-        if reward == 1:
-            self.Q[self.action] += alpha*(reward + self.gamma*Qa - self.Q[self.action])
-        else:
-            self.Q[self.action] = 0.0
+        Qa, _ = demon.getMax()
+        self.Q[self.action] += alpha*(reward + self.gamma*Qa - self.Q[self.action])        
+
 
 class GlobalDemon:
 
-    def __init__( self, env ):
-        self.xThresholds = np.array([-4.8, -0.8, 0.8])
-        self.thetaThresholds = np.array([-24.0, -6.0, -1.0, 0.0, 1.0, 6.0])
-        self.dxThresholds = np.array([-np.inf, -0.5, 0.5])
-        self.dthetaThresholds = np.array([-np.inf, -50.0, 50.0])
+    def __init__( self, env ):        
 
         self.currentDemon = None
         self.env = env
         lc = MChain( 3, MChain( 6, MChain( 3, MChain( 3, None ))))
         self.localDemons = lc.create( LocalDemon )
 
+
     def getLocalDemon( self, state ):
+        xThresholds = np.array([-4.8, -0.8, 0.8])
+        thetaThresholds = np.array([-24.0, -6.0, -2.0, 0.0, 2.0, 6.0])
+        dxThresholds = np.array([-np.inf, -0.5, 0.5])
+        dthetaThresholds = np.array([-np.inf, -100.0, 100.0])
+
         x, dx, theta, dtheta = state
         theta = theta*180.0/np.pi 
         dtheta = dtheta*180.0/np.pi
 
-        i = np.where( self.xThresholds < x )[0][-1]
-        j = np.where( self.thetaThresholds < theta )[0][-1]
-        k = np.where( self.dxThresholds < dx )[0][-1]
-        l = np.where( self.dthetaThresholds < dtheta )[0][-1]
+        i = np.where( xThresholds < x )[0][-1]
+        j = np.where( thetaThresholds < theta )[0][-1]
+        k = np.where( dxThresholds < dx )[0][-1]
+        l = np.where( dthetaThresholds < dtheta )[0][-1]
 
         return self.localDemons[i][j][k][l]
 
     def act( self, state, e ):
         self.currentDemon = self.getLocalDemon( state )
-        action = self.currentDemon.act( self.env, e )
-        return action
+        self.currentDemon.act( self.env, e )
+        return self.currentDemon.action
 
     def update( self, alpha, state, reward ):
         newDemon = self.getLocalDemon( state )
@@ -82,24 +73,38 @@ class GlobalDemon:
 
 
 
-env = gym.make('CartPole-v0')
+env = gym.make('CartPole-v1')
 demon = GlobalDemon( env )
-e = 0.1
-alpha = 0.2
+e = 1.
+alpha = 1.
 rewards = []
+decay = 25.0
+min_e = 0.1
+min_alpha = 0.1
+nEpisodes = 500
+T = 200
 
-for i_episode in range(1000):
+X = None;
+
+f = lambda x, min_x : max( min_x, min( 1.0, 1.0 - np.log10((x + 1)/decay)) )
+
+for i_episode in range(nEpisodes):
     observation = env.reset()
     total_reward = 0.0
+    Y = np.array([])
 
-    for t in range(200):
-       #if i_episode > 690:
-        #    env.render()
+    for t in range(T):
+        #if i_episode > 690:
+           #env.render()
         #print(observation)
-        action = demon.act( observation, 1.0-e )
-        observation, reward, done, info = env.step( action )    
-        total_reward += reward
-        
+        action = demon.act( observation, e )
+        observation, reward, done, info = env.step( action ) 
+        total_reward += reward        
+
+        if Y.size == 0:
+            Y = np.array(observation).T
+        else:
+            Y = np.concatenate( (Y, observation), axis=1 )   
 
         if done:
             demon.update( alpha, observation, 0 )
@@ -107,10 +112,10 @@ for i_episode in range(1000):
             break
         else:
             demon.update( alpha, observation, reward )
-    
-    e = e - 0.0001*e
-    alpha = alpha - 0.001*alpha
-    #print( "Egreedy: " + str(e) )
+
+    print( Y )
+    e = f( i_episode, min_e )
+    alpha = f( i_episode, min_alpha )   
     rewards.append(total_reward)
 
 plt.plot( rewards )
